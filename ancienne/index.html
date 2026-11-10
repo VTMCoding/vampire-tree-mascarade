@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+        img-src 'self' data: blob:;
+        style-src 'self' 'unsafe-inline';
+        script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://www.gstatic.com;
+        connect-src 'self' data: blob: https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.gstatic.com https://*.googleapis.com;"/>
+  <title>Vampire Tree Mascarade - Lignages</title>
+
+  <!-- Tailwind + D3 + flextree -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-flextree@2"></script>
+
+  <style>
+    html,body{height:100%}
+    #treeWrap{position:relative;height:88vh;border-radius:1rem}
+    #treeSvg{width:100%;height:100%;display:block;background:#fff;border-radius:1rem}
+    .node-card{position:relative}
+    .btn{border-radius:.5rem;border:1px solid #cbd5e1;padding:.375rem .75rem;font-size:.875rem}
+    .btn:hover{background:#f8fafc}
+    .btn-primary{background:#eef6ff;border-color:#93c5fd;color:#1e3a8a}
+    .btn-primary:hover{background:#dbeafe}
+    .btn-danger{background:#fff5f5;border-color:#fca5a5;color:#b91c1c}
+    .btn-danger:hover{background:#fee2e2}
+    .btn-ghost{background:#ffffff;border-color:#e5e7eb;color:#334155}
+    .btn-ghost:hover{background:#f8fafc}
+
+    .select-filter label{font-size:.75rem;color:#64748b}
+    .select-filter input{width:100%;border:1px solid #cbd5e1;border-radius:.5rem;padding:.25rem .5rem;margin-bottom:.25rem}
+    #modal.hidden{display:none!important;pointer-events:none!important}
+    #modal.hidden *{pointer-events:none!important}
+    .checkbox input{width:1rem;height:1rem}
+    .detail-key{font-weight:600;text-decoration:underline;text-decoration-thickness:2px;text-decoration-color:#cbd5e1}
+
+    /* Lignes légères */
+    .link-back { fill:none; stroke:#e5e7eb; stroke-width:6; stroke-linecap:round; transition:opacity .15s, stroke .15s, stroke-width .15s }
+    .link-front{ fill:none; stroke:#cbd5e1; stroke-width:2; stroke-linecap:round; transition:opacity .15s, stroke .15s, stroke-width .15s }
+    .link-dot  { fill:#cbd5e1; transition:opacity .15s, fill .15s }
+
+    /* Survol doux */
+    .dim{opacity:.18}
+    .highlight-front{stroke:#94a3b8; stroke-width:3.25}
+    .highlight-back{stroke:#e2e8f0; stroke-width:7}
+    .dot-highlight{fill:#94a3b8}
+    .nodes foreignObject.faded{opacity:.15}
+    .nodes g.selected .node-card{outline:2px solid #a5b4fc; outline-offset:0; border-radius:1rem}
+
+    .form-label{display:block;font-size:.875rem;font-weight:600;color:#334155;margin-bottom:.25rem}
+    .help{font-size:.75rem;color:#64748b}
+  </style>
+
+<!-- Pre-seed default Firebase config (pure JSON, no eval) -->
+<script type="module">
+  const DEFAULT_FB_CFG_OBJ = {
+    apiKey: "AIzaSyBiTQyWELmFX-FUB8DPJqNw1ieUM1QV9y4",
+    authDomain: "vampire-tree-masacarade.firebaseapp.com",
+    projectId: "vampire-tree-masacarade",
+    storageBucket: "vampire-tree-masacarade.firebasestorage.app",
+    messagingSenderId: "675081210379",
+    appId: "1:675081210379:web:9b3e4564a91826073cd50e",
+    measurementId: "G-PLX4GDHTS8"
+  };
+  if (!localStorage.getItem('firebaseConfig')) {
+    localStorage.setItem('firebaseConfig', JSON.stringify(DEFAULT_FB_CFG_OBJ));
+  }
+</script>
+
+</head>
+<body class="bg-slate-50 text-slate-900">
+<header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-slate-200">
+  <div class="w-screen px-4 py-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl lg:text-3xl font-bold tracking-tight">Lignages - Arbre</h1>
+      <span id="stats" class="text-sm text-slate-500"></span>
+    </div>
+    <div class="flex flex-wrap gap-2 items-center">
+      <input id="search" type="search" placeholder="Rechercher un nom…" class="w-72 max-w-[60vw] px-3 py-2 rounded-xl border border-slate-300"/>
+      <button id="zoomIn" class="btn">Zoom +</button>
+      <button id="zoomOut" class="btn">Zoom −</button>
+      <button id="centerRoot" class="btn">Centrer</button>
+      <button id="toggleHover" class="btn">Survol: ON</button>
+      
+<select id="clanSelect" class="btn">
+  <option value="">— Source locale —</option>
+  <option value="brujah">Brujah</option>
+  <option value="gangrel">Gangrel</option>
+  <option value="lasombra">Lasombra</option>
+  <option value="malkavians">Malkavians</option>
+  <option value="nosferatu">Nosferatu</option>
+  <option value="toreador">Toreador</option>
+  <option value="tremere">Tremere</option>
+  <option value="tzimisce">Tzimisce</option>
+  <option value="ventrue">Ventrue</option>
+</select>
+        <select id="lineageFilter" class="btn hidden"><option value="">— Lignée (toutes) —</option></select>
+<button id="fbLoginOpen" class="btn">Se connecter</button>
+<button id="fbLogout" class="btn btn-danger">Se déconnecter</button>
+<span id="fbStatus" class="text-sm text-slate-500"></span>
+<span id="writeBadge" class="ml-2 inline-block px-2 py-1 rounded-full text-xs border border-slate-300 text-slate-600">—</span>
+
+      <button id="openJson" class="btn btn-ghost">Ouvrir JSON</button>
+      <button id="saveJson" class="btn btn-primary">Sauvegarder</button>
+      <button id="addPerson" class="btn">Ajouter un personnage</button>
+      <button id="exportJson" class="btn btn-ghost">Exporter JSON</button>
+    </div>
+  </div>
+</header>
+
+<main class="w-screen p-4 space-y-10">
+  <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4">
+    <div class="mb-3">
+      <h2 class="text-xl font-semibold">Arbre complet</h2>
+      <p class="text-sm text-slate-600">Glisser pour se déplacer, molette pour zoomer. Racine en haut, descendants en dessous.</p>
+    
+    <div id="activityLegend" class="flex flex-wrap gap-2 items-center text-xs text-slate-600 mt-2"></div>
+</div>
+    <div id="treeWrap" class="overflow-hidden">
+      <svg id="treeSvg"></svg>
+    </div>
+  </section>
+
+  <section class="w-screen">
+    <div class="mb-4">
+      <h2 class="text-xl font-semibold">Personnages isolés (non rattachés à l’arbre principal)</h2>
+    </div>
+    <div id="isolated" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-7"></div>
+  </section>
+</main>
+
+<input id="filePicker" type="file" accept=".json" class="hidden"/>
+
+<!-- Modal -->
+<div id="modal" class="hidden fixed inset-0 z-50">
+  <div class="absolute inset-0 bg-black/40" data-close></div>
+  <div class="relative mx-auto mt-8 w-[min(1120px,92vw)] max-h-[88vh]">
+    <div class="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden h-full flex flex-col">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+        <h3 id="modal-title" class="text-xl font-semibold">Détails</h3>
+        <div class="flex gap-2">
+          <button id="editBtn" class="btn">Éditer</button>
+          <button id="deleteBtn" class="btn btn-danger" style="color:#b91c1c;border-color:#fca5a5;">Supprimer</button>
+          <button class="rounded-full p-2 hover:bg-slate-100" data-close aria-label="Fermer">✕</button>
+        </div>
+      </div>
+      <div id="modal-body" class="p-6 overflow-y-auto max-h-[74vh]"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ==== Globals (read-only + toasts) ==== */
+if (typeof window.showToast !== 'function') {
+  // Fallback toast (minimal) – will be overridden by the Firebase module's nicer version
+  window.showToast = function(msg, type='info'){ try{ console.log('[toast]', type, msg); }catch(_){} };
+}
+function setReadOnlyMode(flag){
+  document.body.classList.toggle('read-only', !!flag);
+  const ids = ['addPerson','editBtn','deleteBtn','editBtnInner','deleteBtnInner'];
+  ids.forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    if(flag){
+      el.classList.add('edit-disabled');
+      el.setAttribute('aria-disabled','true');
+      el.setAttribute('disabled','');
+    }else{
+      el.classList.remove('edit-disabled');
+      el.removeAttribute('aria-disabled');
+      el.removeAttribute('disabled');
+    }
+  });
+}
+
+/* ===== Utils ===== */
+const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+const esc=(s)=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");
+document.addEventListener('keydown',(e)=>{const t=e.target,tag=t?.tagName,isEd=t?.isContentEditable||tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT';if(isEd)e.stopPropagation();},{capture:true});
+function downloadBlob(filename,dataStr){const blob=new Blob([dataStr],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url; a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1e3);}
+
+/* JSON tolérant */
+function smartParseJSON(text) {
+  try { return JSON.parse(text); } catch(e1) {
+    let t = String(text);
+    t = t.replace(/^\uFEFF/, '');
+    t = t.replace(/(^|[^:])\/\/.*$/gm, '$1');
+    t = t.replace(/\/\*[\s\S]*?\*\//g, '');
+    t = t.replace(/,\s*([\]}])/g, '$1');
+    t = t.replace(/'([^'\\]*(\\.[^'\\]*)*)'/g, '"$1"');
+    t = t.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_\- ]*)(\s*:)/g, (m,p1,p2,p3)=> `${p1}"${p2.trim().replace(/"/g,'\\"')}"${p3}`);
+    return JSON.parse(t);
+  }
+}
+
+/* ===== Données ===== */
+let records=[], choices=null, lastPath=null, fileHandle=null;
+let ctx={byId:new Map(),rootId:null,zoom:null,svg:null,zoomLayer:null,_hover:null};
+let currentId=null;
+let currentLineage='';
+
+/* Survol ON/OFF */
+let hoverEnabled = true;
+function updateHoverButton(){ $("#toggleHover").textContent = `Survol: ${hoverEnabled?'ON':'OFF'}`; }
+function clearHover(){
+  const h=ctx._hover; if(!h) return;
+  h.gNodes.selectAll("foreignObject").classed("faded", false);
+  h.gNodes.selectAll("g").classed("selected", false);
+  h.pathsFront.classed("highlight-front", false).classed("dim", false);
+  h.pathsBack.classed("highlight-back", false).classed("dim", false);
+  h.dotsSrc.classed("dot-highlight", false).classed("dim", false);
+  h.dotsTgt.classed("dot-highlight", false).classed("dim", false);
+}
+$("#toggleHover").onclick=()=>{ hoverEnabled=!hoverEnabled; updateHoverButton(); if(!hoverEnabled) clearHover(); };
+
+/* ===== Normalisation / Index ===== */
+function normalizeRecords(raw){
+  if(Array.isArray(raw)) return raw;
+  if(raw && Array.isArray(raw.records)) return raw.records;
+  if(raw && Array.isArray(raw.data)) return raw.data;
+  for(const k in raw){ if(Array.isArray(raw[k])) return raw[k]; }
+  return [];
+}
+function baseSlug(name){
+  return (String(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+   .toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')) || 'perso';
+}
+function uniqueSlugFromName(name){
+  const base = baseSlug(name);
+  const used = new Set(records.map(r=>String(r.id)));
+  if(!used.has(base)) return base;
+  let i=2, cand=`${base}-${i}`;
+  while(used.has(cand)){ i+=1; cand=`${base}-${i}`; }
+  return cand;
+}
+function toIntOrNull(v){
+  if(v===null||v===undefined||v==='') return null;
+  const n = Math.round(Number(String(v).replace(',', '.')));
+  return Number.isFinite(n) ? n : null;
+}
+function parseInfants(v){
+  if(Array.isArray(v)) return v.map(x=>String(x).trim()).filter(Boolean);
+  if(v==null) return [];
+  if(typeof v==='string'){
+    const t=v.trim(); if(!t) return [];
+    return t.split(/[;,]+/).map(s=>s.trim()).filter(Boolean);
+  }
+  return [];
+}
+function buildIndexes(){
+  ctx.byId=new Map();
+  for(const r of records){
+    if(r.torpeurs!=null) r.torpeurs = toIntOrNull(r.torpeurs);
+    if(r.generation!=null) r.generation = toIntOrNull(r.generation);
+    r.id = String(r.id ?? '').trim();
+    r.sire = (r.sire==null||r.sire==='')?null:String(r.sire);
+    r.infants = parseInfants(r.infants);
+    ctx.byId.set(r.id, r);
+  }
+  for(const r of records){
+    if(r.sire && ctx.byId.has(r.sire)){
+      const parent = ctx.byId.get(r.sire);
+      if(!Array.isArray(parent.infants)) parent.infants = [];
+      if(!parent.infants.includes(r.id)) parent.infants.push(r.id);
+    }
+  }
+  for(const r of records){
+    for(const cid of r.infants){
+      const ch=ctx.byId.get(cid); if(ch && (ch.sire==null||ch.sire==='')) ch.sire=r.id;
+    }
+  }
+}
+function pickRoot(){
+  for(const r of records){ if((r.personnage_nom||'').trim().toLowerCase()==='malkav') return r.id; }
+  const allInf=new Set(); for(const r of records) for(const id of r.infants) allInf.add(id);
+  const roots = records.filter(r=>!allInf.has(r.id));
+  let best=null,bestSize=-1;
+  for(const root of roots){
+    const size=(function reach(id){const vis=new Set([id]);const st=[id];while(st.length){const x=st.pop(),p=ctx.byId.get(x);if(!p)continue; for(const c of p.infants){if(!vis.has(c)&&ctx.byId.has(c)){vis.add(c);st.push(c);}}} return vis.size;})(root.id);
+    if(size>bestSize){bestSize=size;best=root.id;}
+  }
+  return best || (records[0]?.id ?? null);
+}
+
+/* ===== Couleurs & cartes ===== */
+function isMalkavian(p){return (p.clan||"").toLowerCase().includes('malkavian');}
+function clanPillClass(p){
+  if(isMalkavian(p)){
+    const c=(p.clan||"").toLowerCase();
+    if(c.includes('chevalier')) return 'bg-amber-50 text-amber-700 border-amber-200';
+    if(c.includes('ananke'))    return 'bg-rose-50 text-rose-700 border-rose-200';
+    return 'bg-slate-100 text-slate-700 border-slate-300';
+  }
+  return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+}
+function activityClasses(p){
+  const a=(p.activite||"").toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  if(a.includes('detruit')||a.includes('detrui')) return 'bg-red-50 border-red-200';
+  if(a.includes('etranger'))                       return 'bg-blue-50 border-blue-200';
+  if(a.includes('actif'))                          return 'bg-green-50 border-green-200';
+  if(a.includes('disparu'))                        return 'bg-slate-50 border-slate-300';
+  if(a.includes('torpeur'))                        return 'bg-purple-50 border-purple-200';
+  if(a.includes('retire'))                         return 'bg-orange-50 border-orange-200';
+  return 'bg-white border-slate-300';
+}
+function fmtInt(v){ const n=toIntOrNull(v); return n==null?null:String(n); }
+
+function nodeCardHTML(p){
+  const gen=fmtInt(p.generation);
+  const clanCls=clanPillClass(p);
+  const actCls=activityClasses(p);
+  return `
+  <div class="node-card rounded-2xl border ${actCls} px-3 py-2 shadow-sm hover:shadow-md transition cursor-pointer max-w-[260px]">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="font-semibold text-base leading-tight truncate">${esc(p.personnage_nom || '(Sans nom)')}</span>
+      ${gen?`<span class="text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">Gen ${gen}</span>`:''}
+      ${(p.clan)?`<span class="text-[11px] px-1.5 py-0.5 rounded-full border ${clanCls}">${esc(p.clan)}</span>`:''}
+    </div>
+    ${(p.ville)?`<div class="mt-1 text-sm text-slate-700 truncate">${esc(p.ville)}</div>`:''}
+  </div>`;
+}
+function isolatedCardHTML(p){
+  const gen=fmtInt(p.generation);
+  const clanCls=clanPillClass(p);
+  const actCls=activityClasses(p);
+  return `
+  <div class="rounded-xl border ${actCls} px-3 py-2 shadow-sm hover:shadow-md transition cursor-pointer">
+    <div class="flex items-baseline justify-between gap-2">
+      <span class="font-semibold text-sm truncate max-w-[12rem]">${esc(p.personnage_nom || '(Sans nom)')}</span>
+      <div class="flex items-center gap-1.5">
+        ${gen?`<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">G${gen}</span>`:''}
+        ${(p.clan)?`<span class="text-[10px] px-1.5 py-0.5 rounded-full border ${clanCls}">${esc(p.clan)}</span>`:''}
+      </div>
+    </div>
+    ${(p.ville)?`<div class="mt-1 text-xs text-slate-600 truncate">${esc(p.ville)}</div>`:''}
+  </div>`;
+}
+
+/* ===== Détails ===== */
+function formatCommentaires(v){
+  if(v==null) return '—';
+  if(Array.isArray(v)){return v.map(x=>String(x)).join('<br>');}
+  if(typeof v==='object'){try{return esc(JSON.stringify(v,null,2));}catch{return String(v);}}
+  return esc(String(v));
+}
+function yn(v){ if(v===true||v==="Oui") return "Oui"; if(v===false||v==="Non") return "Non"; return v ?? "—"; }
+function asClickableLink(raw){
+  if(!raw) return "—";
+  const s=String(raw).trim(); if(!s) return "—";
+  const url = /^(https?:)?\/\//i.test(s) ? s : (s.startsWith("/")?s:`https://${s}`);
+  return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="text-indigo-600 hover:underline break-all">${esc(s)}</a>`;
+}
+function openDetails(person){
+  currentId=person.id; $("#modal-title").textContent=person.personnage_nom||"Détails";
+  const sireName = person.nom_sire || (person.sire && ctx.byId.get(person.sire)?.personnage_nom) || null;
+  const rows=[
+    ["Nom", person.personnage_nom],["ID", person.id],
+    ["Sire", sireName || "—"],["Sire ID", person.sire ?? "—"],
+    ["Clan", person.clan || "—"],["Lignée", person.lignee || "—"],["Affiliation", person.affiliation || "—"],["Statut", person.statut || "—"],["Classe", person.classe || "—"],
+    ["Activité", person.activite || "—"],["Ville", person.ville || "—"],
+    ["Génération", fmtInt(person.generation) ?? "—"],["Connait sire", yn(person.connait)],
+    ["Concept", person.concept ?? "—"],["Naissance", person.naissance ?? "—"],
+    ["Pays", person.pays ?? "—"],["Étreinte", person.etreinte ?? "—"],
+    ["Torpeurs (mois)", fmtInt(person.torpeurs) ?? "—"],["Destruction", person.destruction ?? "—"],
+    ["Diablerie", yn(person.diablerie)],["Date diablerie", person.date_diablerie ?? "—"],
+    ["Infants (IDs)", (person.infants||[]).join(", ") || "—"],["Commentaires", formatCommentaires(person.commentaires ?? "—")],
+    ["Lien fiche", {__html: asClickableLink(person.lien_fiche)}]
+  ];
+  $("#modal-body").innerHTML=`
+    <div class="grid md:grid-cols-2 gap-5">
+      ${rows.map(([k,v])=>`<div class="flex items-start gap-3">
+        <div class="w-44 shrink-0 text-xs detail-key uppercase tracking-wide text-slate-600">${esc(k)}</div>
+        <div class="text-base break-words">${
+          (v && typeof v==='object' && v.__html) ? v.__html
+            : (typeof v==='string' ? esc(v) : esc(String(v)))
+        }</div>
+      </div>`).join("")}
+      <div class="md:col-span-2 flex gap-2 pt-4">
+        <button id="editBtnInner" class="btn">Éditer</button>
+        <button id="deleteBtnInner" class="btn btn-danger">Supprimer</button>
+      </div>
+    </div>`;
+  $("#modal").classList.remove("hidden");
+  $("#editBtn").onclick=()=>openEditForm(person.id);
+  $("#editBtnInner").onclick=()=>openEditForm(person.id);
+  $("#deleteBtn").onclick=()=>deletePerson(person.id);
+  $("#deleteBtnInner").onclick=()=>deletePerson(person.id);
+  if(document.body.classList.contains("read-only")) setReadOnlyMode(true);
+}
+
+/* ===== Formulaires ===== */
+const CHOICE_KEYS = ['ville','activite','clan','classe','affiliation','lignee','statut','joueur_proprio','diablerie','generation'];
+const CHOICE_ALIAS = { 'connait': 'connait sire' };
+const BOOLEAN_FIELDS = new Set(['joueur_proprio','connait','diablerie']);
+const DATE_FIELDS = new Set(['naissance','etreinte','destruction','date_diablerie']);
+const NUMBER_FIELDS = new Set(['generation','torpeurs']);
+
+const FIELDS_LEFT =['personnage_nom','nom_reel','joueur_id','joueur_proprio','clan','lignee','affiliation','statut','activite','classe','diablerie'];
+const FIELDS_RIGHT=['ville','generation','connait','concept','naissance','pays','etreinte','torpeurs','destruction','date_diablerie','lien_fiche','commentaires'];
+
+function getChoices(key){
+  const lookup = CHOICE_ALIAS[key] || key;
+  if(lookup==='generation'){
+    if(choices && Array.isArray(choices.generation)) return choices.generation.map(x=>String(x));
+    return Array.from({length:13},(_,i)=>String(i+3));
+  }
+  const arr = (choices && Array.isArray(choices[lookup])) ? choices[lookup] : [];
+  return arr.map(x=>String(x)).filter(Boolean);
+}
+function selectHTML(name,value,arr){
+  const options = [`<option value=""></option>`].concat(arr.map(v=>`<option value="${esc(v)}" ${String(v)===String(value??"")?'selected':''}>${esc(v)}</option>`));
+  const id=`sel_${name}_${Math.random().toString(36).slice(2)}`,fid=`filter_${id}`;
+  return `
+    <div class="select-filter"><label for="${fid}">Filtrer ${esc(name)}:</label>
+      <input id="${fid}" data-target="${id}" placeholder="taper pour filtrer…">
+    </div>
+    <select id="${id}" name="${name}" class="w-full border rounded-lg px-3 py-2">${options.join("")}</select>`;
+}
+function checkboxHTML(name,checked,label){
+  const isOn = (checked===true || checked==="Oui");
+  return `<label class="checkbox inline-flex items-center gap-2">
+    <input type="checkbox" name="${name}" ${isOn?'checked':''}/>
+    <span>${esc(label||name)}</span>
+  </label>`;
+}
+function dateHTML(name,value){  /* texte simple */
+  const val = value==null ? "" : String(value);
+  return `<input type="text" name="${name}" class="w-full border rounded-lg px-3 py-2" placeholder="JJ/MM/AAAA" value="${esc(val)}">`;
+}
+function numberHTML(name,value,step=1,min=null){
+  const v = (value==null||value==='') ? '' : String(toIntOrNull(value)??'');
+  return `<input type="number" name="${name}" class="w-full border rounded-lg px-3 py-2" step="${step}" ${min!=null?`min="${min}"`:''} value="${esc(v)}">`;
+}
+function readonlyHTML(label, value){
+  return `<label class="form-label">${esc(label)}</label>
+          <input class="w-full border rounded-lg px-3 py-2 bg-slate-100 text-slate-500" value="${esc(value??'')}" readonly disabled>`;
+}
+function labelNameCity(r){
+  const nm = r.personnage_nom || r.id || '';
+  const city = r.ville ? ` (${r.ville})` : '';
+  return `${nm}${city}`;
+}
+function fieldInputHTML(key,value){
+  if(key==='sire' || key==='infants') return '';
+  if(key==='joueur_id'){ return readonlyHTML('joueur_id', value); }
+  if(BOOLEAN_FIELDS.has(key)) return `<div>${checkboxHTML(key,value, key==='connait'?'connait sire':key)}</div>`;
+  if(DATE_FIELDS.has(key)) return `<label class="form-label">${esc(key==='date_diablerie'?'date diablerie':key)}</label>${dateHTML(key,value)}`;
+  if(NUMBER_FIELDS.has(key)){
+    if(key==='torpeurs') return `<label class="form-label">torpeurs (mois)</label>${numberHTML(key,value,1,0)}`;
+    if(key==='generation') return `<label class="form-label">generation</label>${selectHTML(key,fmtInt(value),getChoices('generation'))}`;
+  }
+  const isChoice = CHOICE_KEYS.includes(key) || (CHOICE_ALIAS[key]!=null);
+  if(isChoice) return `<label class="form-label">${esc(key)}</label>` + selectHTML(key,value,getChoices(key));
+  const isLong=String(value??"").length>120 || key==='commentaires';
+  if(isLong){return `<label class="form-label">${esc(key)}</label><textarea name="${key}" class="w-full border rounded-lg px-3 py-2" rows="3">${esc(value??"")}</textarea>`;}
+  return `<label class="form-label">${esc(key)}</label><input name="${key}" class="w-full border rounded-lg px-3 py-2" value="${esc(value??"")}">`;
+}
+function bindSelectFilters(root){
+  $$(".select-filter input",root).forEach(inp=>{
+    const sel=root.querySelector(`#${inp.dataset.target}`); if(!sel)return;
+    const original=Array.from(sel.options).map(o=>({value:o.value,text:o.textContent}));
+    inp.addEventListener("input",()=>{
+      const q=inp.value.trim().toLowerCase(); const cur=sel.value; sel.innerHTML="";
+      const addOpt=(v,t)=>{const o=document.createElement("option");o.value=v;o.textContent=t;sel.appendChild(o);};
+      addOpt("","");
+      original.filter(o=>o.value===""||o.text.toLowerCase().includes(q)).forEach(o=>addOpt(o.value,o.text));
+      sel.value=cur && Array.from(sel.options).some(o=>o.value===cur)?cur:"";
+    });
+  });
+}
+function uniqPush(arr, v){ if(!Array.isArray(arr)) arr=[]; if(!arr.includes(v)) arr.push(v); return arr; }
+function removeInPlace(arr, v){ if(!Array.isArray(arr)) return; const i=arr.indexOf(v); if(i>=0) arr.splice(i,1); }
+
+/* ------ EDITER/AJOUTER ------ */
+async function openEditForm(id){
+  if(!choices){ try{ await loadChoices(); }catch(e){} }
+  let edit = !!id && ctx && ctx.byId && ctx.byId.has(id);
+  const p = edit ? (ctx.byId.get(id) || {}) : {};
+  $("#modal-title").textContent=edit?`Éditer — ${p.personnage_nom||p.id}`:"Ajouter un personnage";
+
+  const currentSlug = edit ? p.id : '';
+  const idPreview = `
+    <div class="md:col-span-2">
+      <label class="form-label">ID (auto)</label>
+      <input id="idPreview" class="w-full border rounded-lg px-3 py-2 bg-slate-100 text-slate-500" value="${esc(currentSlug)}" readonly disabled>
+      <p class="help">Généré à partir du nom (minuscules + tirets). Suffixe -2, -3… si doublon.</p>
+    </div>`;
+
+  const left = FIELDS_LEFT.map(k=>`<div>${fieldInputHTML(k,p[k])}</div>`).join("");
+  const right= FIELDS_RIGHT.map(k=>`<div>${fieldInputHTML(k,p[k])}</div>`).join("");
+
+  // sire + filtre
+  const sireId = `sire_${Math.random().toString(36).slice(2)}`;
+  const sireFilterId = `filter_${sireId}`;
+  const sireOptions = ['<option value="">— Aucun (racine)</option>'].concat(
+    records
+      .filter(r=>!edit || r.id!==id)
+      .sort((a,b)=>String(a.personnage_nom||"").localeCompare(String(b.personnage_nom||"")))
+      .map(r=>`<option value="${esc(r.id)}" ${String(r.id)===String(p.sire??"")?'selected':''}>${esc(labelNameCity(r))}</option>`)
+  ).join("");
+
+  // infants + filtre
+  const kidsId = `kids_${Math.random().toString(36).slice(2)}`;
+  const kidsFilterId = `filter_${kidsId}`;
+  const kidsOptions = records
+    .filter(r=>!edit || r.id!==id)
+    .sort((a,b)=>String(a.personnage_nom||"").localeCompare(String(b.personnage_nom||"")))
+    .map(r=>{const sel=(p.infants||[]).includes(r.id)?'selected':'';return `<option value="${esc(r.id)}" ${sel}>${esc(labelNameCity(r))}</option>`;})
+    .join("");
+
+  $("#modal-body").innerHTML=`
+    <form id="editForm" class="grid md:grid-cols-2 gap-5">
+      ${idPreview}
+      <div>${left}</div>
+      <div>${right}</div>
+
+      <div class="md:col-span-2">
+        <label class="form-label">sire</label>
+        <div class="select-filter"><label for="${sireFilterId}">Filtrer sire :</label>
+          <input id="${sireFilterId}" data-target="${sireId}" placeholder="taper pour filtrer…">
+        </div>
+        <select id="${sireId}" name="sire" class="w-full border rounded-lg px-3 py-2">
+          ${sireOptions}
+        </select>
+      </div>
+
+      <div class="md:col-span-2">
+        <label class="form-label">infants (sélection multiple)</label>
+        <div class="select-filter"><label for="${kidsFilterId}">Filtrer infants :</label>
+          <input id="${kidsFilterId}" data-target="${kidsId}" placeholder="taper pour filtrer…">
+        </div>
+        <select id="${kidsId}" name="infants" class="w-full border rounded-lg px-3 py-2" multiple size="12">
+          ${kidsOptions}
+        </select>
+      </div>
+
+      <div class="md:col-span-2 flex gap-2 pt-2">
+        <button type="submit" class="btn" style="background:#eef2ff;border-color:#c7d2fe;color:#3730a3;">Enregistrer</button>
+        <button type="button" id="cancelEdit" class="btn">Annuler</button>
+      </div>
+    </form>`;
+  $("#modal").classList.remove("hidden");
+  $("#cancelEdit").onclick=()=>{ if(edit && ctx.byId && ctx.byId.has(id)) openDetails(ctx.byId.get(id)); else $("#modal").classList.add("hidden"); };
+  bindSelectFilters($("#modal-body"));
+
+  const nameInput = $("#editForm input[name='personnage_nom']");
+  const idPrev = $("#idPreview");
+  if(nameInput && idPrev && !edit){
+    const updatePreview=()=>{ idPrev.value = uniqueSlugFromName(nameInput.value||''); };
+    nameInput.addEventListener("input", updatePreview);
+    updatePreview();
+  }
+
+  $("#editForm").onsubmit=(e)=>{
+    e.preventDefault();
+    const fd=new FormData(e.target); const out={};
+    for(const [k,v] of fd.entries()){
+      if(k==='infants' || k==='sire') continue;
+      if(k==='joueur_id') continue; // non modifiable
+      if(BOOLEAN_FIELDS.has(k)){
+        out[k] = (k==='diablerie') ? (fd.get(k) ? "Oui" : "Non") : !!fd.get(k);
+        continue;
+      }
+      if(DATE_FIELDS.has(k)){ out[k] = v || null; continue; }
+      if(NUMBER_FIELDS.has(k)){
+        const n = toIntOrNull(v);
+        out[k] = (n==null?null:n);
+        continue;
+      }
+      out[k] = v==="" ? null : v;
+    }
+    const sireVal = fd.get('sire'); out.sire = (sireVal===""?null:sireVal);
+    const infantsSel = Array.from($("#editForm select[name='infants']").selectedOptions).map(o=>o.value);
+
+    if(edit){
+      const me = ctx.byId.get(id);
+      const oldSire=me.sire??null;
+      if(oldSire!==out.sire){
+        if(oldSire && ctx.byId.has(oldSire)) removeInPlace(ctx.byId.get(oldSire).infants, me.id);
+        if(out.sire && ctx.byId.has(out.sire)) uniqPush(ctx.byId.get(out.sire).infants, me.id);
+      }
+      const oldKids=new Set(me.infants||[]), newKids=new Set(infantsSel);
+      for(const child of oldKids){ if(!newKids.has(child) && ctx.byId.has(child) && ctx.byId.get(child).sire===me.id) ctx.byId.get(child).sire=null; }
+      for(const child of newKids){ const ch=ctx.byId.get(child); if(!ch)continue; const prev=ch.sire; if(prev && ctx.byId.has(prev)) removeInPlace(ctx.byId.get(prev).infants, child); ch.sire=me.id; }
+      me.infants = infantsSel.slice();
+      Object.assign(me, out);
+    }else{
+      const pid = idPrev.value || uniqueSlugFromName(String(fd.get('personnage_nom')||''));
+      const np = Object.assign({ id: pid, infants: [] }, out);
+      np.infants = infantsSel.slice();
+      for(const child of np.infants){ const ch=ctx.byId.get(child); if(!ch)continue; const prev=ch.sire; if(prev && ctx.byId.has(prev)) removeInPlace(ctx.byId.get(prev).infants, child); ch.sire = pid; }
+      if(np.sire && ctx.byId.has(np.sire)) uniqPush(ctx.byId.get(np.sire).infants, pid);
+      records.push(np);
+    }
+    renderAll();
+    if(edit) openDetails(ctx.byId.get(id)); else $("#modal").classList.add("hidden");
+  };
+}
+async function deletePerson(id){
+  const p=ctx.byId.get(id); if(!p)return;
+  const __ok = await uiConfirm(`Supprimer le personnage « ${id} » ?`); if(!__ok) return;
+  if(p.sire && ctx.byId.has(p.sire)) removeInPlace(ctx.byId.get(p.sire).infants, id);
+  for(const child of (p.infants||[])){ if(ctx.byId.has(child) && ctx.byId.get(child).sire===id) ctx.byId.get(child).sire=null; }
+  records = records.filter(x=>x.id!==id);
+  renderAll();
+  $("#modal").classList.add("hidden");
+}
+
+/* ===== Arbre (flextree) ===== */
+function renderTree(treeData){
+  const svg=d3.select("#treeSvg"); svg.selectAll("*").remove(); ctx.svg=svg;
+
+  const margin={top:100,right:120,bottom:120,left:120};
+  const nodeW0=240, nodeH0=120;
+  const HSPACE=40, VSPACE=160;
+  const PAD=12;
+
+  const ft = d3.flextree().nodeSize(d => [ (d.data._w??nodeW0) + HSPACE, (d.data._h??nodeH0) + VSPACE ]);
+  const root = ft.hierarchy(treeData);
+
+  ctx.zoomLayer = svg.append("g").attr("class","zoom-layer");
+  const gLinksBack = ctx.zoomLayer.append("g").attr("class","links-back").attr("pointer-events","none");
+  const gLinksFront = ctx.zoomLayer.append("g").attr("class","links-front").attr("pointer-events","none");
+  const gDots = ctx.zoomLayer.append("g").attr("class","link-dots").attr("pointer-events","none");
+  const gNodes = ctx.zoomLayer.append("g").attr("class","nodes");
+
+  const node=gNodes.selectAll("g").data(root.descendants()).join("g");
+  node.each(d=>{ d.data._w = nodeW0; d.data._h = nodeH0; });
+
+  const fo = node.append("foreignObject")
+    .attr("width",nodeW0).attr("height",nodeH0)
+    .html(d=>`<div xmlns="http://www.w3.org/1999/xhtml" style="overflow:visible">${nodeCardHTML(d.data.data)}</div>`)
+    .on("click",(e,d)=>openDetails(d.data.data));
+
+  node.each(function(d){
+    const fo=this.querySelector("foreignObject");
+    const div=fo.firstElementChild;
+    fo.setAttribute("width", 512);
+    fo.setAttribute("height", 1024);
+    const w=Math.ceil(div.scrollWidth)+PAD;
+    const h=Math.ceil(div.scrollHeight)+PAD;
+    d.data._w = Math.max(160, Math.min(w, 520));
+    d.data._h = Math.max(90,  Math.min(h, 420));
+  });
+
+  ft.nodeSize(d => [ d.data._w + HSPACE, d.data._h + VSPACE ]);
+  ft(root);
+
+  node.select("foreignObject")
+    .attr("width",d=>d.data._w)
+    .attr("height",d=>d.data._h);
+
+  node.attr("transform",d=>`translate(${d.x - d.data._w/2},${d.y - d.data._h/2})`);
+
+  const rawLinks = root.links();
+  const edgeLinks = rawLinks.map(l => ({
+    source: { x:l.source.x, y:l.source.y + l.source.data._h/2, id:l.source.data.id, node:l.source },
+    target: { x:l.target.x, y:l.target.y - l.target.data._h/2, id:l.target.data.id, node:l.target },
+    sid: l.source.data.id, tid: l.target.data.id
+  }));
+  const curveVertical = (s,t)=>{
+    const dy = t.y - s.y;
+    const v  = Math.max(60, dy * 0.75);
+    return `M${s.x},${s.y} C ${s.x},${s.y+v} ${t.x},${t.y-v} ${t.x},${t.y}`;
+  };
+  const pathsBack = gLinksBack.selectAll("path").data(edgeLinks).join("path")
+    .attr("class","link-back").attr("d",d=>curveVertical(d.source,d.target));
+  const pathsFront = gLinksFront.selectAll("path").data(edgeLinks).join("path")
+    .attr("class","link-front").attr("d",d=>curveVertical(d.source,d.target));
+  const dotsSrc = gDots.selectAll("circle.source").data(edgeLinks).join("circle")
+    .attr("class","link-dot source").attr("r",2.4).attr("cx",d=>d.source.x).attr("cy",d=>d.source.y);
+  const dotsTgt = gDots.selectAll("circle.target").data(edgeLinks).join("circle")
+    .attr("class","link-dot target").attr("r",2.4).attr("cx",d=>d.target.x).attr("cy",d=>d.target.y);
+
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  root.each(d=>{
+    x0=Math.min(x0, d.x - d.data._w/2);
+    x1=Math.max(x1, d.x + d.data._w/2);
+    y0=Math.min(y0, d.y - d.data._h/2);
+    y1=Math.max(y1, d.y + d.data._h/2);
+  });
+  const contentW=(x1-x0)+margin.left+margin.right;
+  const contentH=(y1-y0)+margin.top+margin.bottom;
+  svg.attr("viewBox",[0,0,contentW,contentH]).attr("width","100%").attr("height","100%");
+
+  const tx = (margin.left - x0), ty = (margin.top - y0);
+  gNodes.attr("transform",`translate(${tx},${ty})`);
+  gLinksBack.attr("transform",`translate(${tx},${ty})`);
+  gLinksFront.attr("transform",`translate(${tx},${ty})`);
+  gDots.attr("transform",`translate(${tx},${ty})`);
+
+  // ---- Survol (ON/OFF via hoverEnabled) ----
+  function onLeave(){
+    if(!hoverEnabled) return;
+    gNodes.selectAll("foreignObject").classed("faded", false);
+    gNodes.selectAll("g").classed("selected", false);
+    pathsFront.classed("highlight-front", false).classed("dim", false);
+    pathsBack.classed("highlight-back", false).classed("dim", false);
+    dotsSrc.classed("dot-highlight", false).classed("dim", false);
+    dotsTgt.classed("dot-highlight", false).classed("dim", false);
+  }
+  function collectDescIds(n,set){ set.add(n.data.id); if(n.children) n.children.forEach(c=>collectDescIds(c,set)); }
+  function collectAncIds(n,set){ let p=n.parent; while(p){ set.add(p.data.id); p=p.parent; } }
+  node.on("mouseenter",(e,d)=>{
+    if(!hoverEnabled) return;
+    const keep=new Set(); collectDescIds(d,keep); collectAncIds(d,keep);
+    gNodes.selectAll("foreignObject").classed("faded", n=>!keep.has(n.data.id));
+    gNodes.selectAll("g").classed("selected", n=>keep.has(n.data.id));
+    const act = l=> keep.has(l.sid) && keep.has(l.tid);
+    pathsFront.classed("highlight-front", act).classed("dim", l=>!act(l));
+    pathsBack.classed("highlight-back", act).classed("dim", l=>!act(l));
+    dotsSrc.classed("dot-highlight", act).classed("dim", l=>!act(l));
+    dotsTgt.classed("dot-highlight", act).classed("dim", l=>!act(l));
+  }).on("mouseleave", onLeave);
+
+  // exposer les sélecteurs pour clearHover()
+  ctx._hover = { gNodes, pathsFront, pathsBack, dotsSrc, dotsTgt };
+
+  // zoom & centrage global
+  const svgSel=d3.select("#treeSvg");
+  const viewW=$("#treeWrap").clientWidth, viewH=$("#treeWrap").clientHeight;
+  const centerX = (x0 + x1)/2 + tx, centerY = (y0 + y1)/2 + ty;
+  const zoom=d3.zoom().scaleExtent([0.05,120]).on("zoom",(ev)=>ctx.zoomLayer.attr("transform",ev.transform));
+  ctx.zoom=zoom; svgSel.call(zoom);
+  const baseFit=Math.min(viewW/contentW, viewH/contentH);
+  const initialScale=Math.max(9.5, baseFit*10);
+  const initTx=(viewW/2)-centerX*initialScale, initTy=40-centerY*initialScale;
+  svgSel.call(zoom.transform,d3.zoomIdentity.translate(initTx,initTy).scale(initialScale));
+  $("#zoomIn").onclick=()=>svgSel.transition().duration(200).call(zoom.scaleBy,1.25);
+  $("#zoomOut").onclick=()=>svgSel.transition().duration(200).call(zoom.scaleBy,1/1.25);
+  $("#centerRoot").onclick=()=>{
+    const s=Math.max(12.0,d3.zoomTransform(svgSel.node()).k);
+    const tx2=(viewW/2)-centerX*s, ty2=40-centerY*s;
+    svgSel.transition().duration(350).call(zoom.transform,d3.zoomIdentity.translate(tx2,ty2).scale(s));
+  };
+}
+
+/* ===== Isolés & rendu global ===== */
+function renderIsolated(covered){
+  const isolated=records
+    .filter(r=>!covered.has(r.id) && (!currentLineage || String(r.lignee||'').trim().toLowerCase()===String(currentLineage).trim().toLowerCase()))
+    .sort((a,b)=>String(a.personnage_nom||"").localeCompare(String(b.personnage_nom||"")));
+  const wrap=$("#isolated"); wrap.innerHTML="";
+  for(const p of isolated){
+    const d=document.createElement("div"); d.innerHTML=isolatedCardHTML(p);
+    const card=d.firstElementChild; card.addEventListener("click",()=>openDetails(p)); wrap.appendChild(card);
+  }
+}
+function populateLineageFilter(){
+  const selClan = document.getElementById('clanSelect');
+  const el = document.getElementById('lineageFilter');
+  if(!el) return;
+  const hasClan = !!(selClan && selClan.value);
+  // show only when a clan is selected
+  el.classList.toggle('hidden', !hasClan);
+  if(!hasClan){ currentLineage=''; el.innerHTML='<option value="">— Lignée (toutes) —</option>'; return; }
+
+  const values = Array.from(new Set(records.map(r=>String(r.lignee||'').trim()).filter(Boolean)));
+  values.sort((a,b)=>a.localeCompare(b,'fr'));
+  const cur = String(currentLineage||'').trim().toLowerCase();
+  el.innerHTML = '<option value="">— Lignée (toutes) —</option>' + values.map(v=>{
+    const vv = String(v).trim();
+    const sel = (vv.toLowerCase()===cur) ? ' selected' : '';
+    return `<option value="${esc(vv)}"${sel}>${esc(vv)}</option>`;
+  }).join('');
+}
+
+
+function renderActivityLegend(){
+  const el = document.getElementById('activityLegend'); if(!el) return;
+  const list = (choices && Array.isArray(choices.activite) && choices.activite.length)
+    ? choices.activite
+    : ["Actif","A l'étranger","Torpeur","Disparu","Retiré du jeu","Détruit"];
+  el.innerHTML = list.map(lbl=>{
+    const cls = activityClasses({ activite: lbl });
+    return `<span class="inline-flex items-center px-2 py-1 rounded-full border ${cls}">${esc(lbl)}</span>`;
+  }).join(' ');
+}
+
+function renderAll(){
+  buildIndexes();
+  // lineage-aware root selection
+  if(currentLineage){
+    const cur = String(currentLineage).trim().toLowerCase();
+    const cand = records.filter(r => String(r.lignee||'').trim().toLowerCase()===cur);
+    if(cand.length){
+      const inSet = new Set(cand.map(r=>r.id));
+      const gens = cand.map(r=>r.generation).filter(g=>g!=null);
+      const minGen = gens.length ? Math.min(...gens) : Infinity;
+      const roots = cand.filter(r => (r.generation===minGen) || !inSet.has(r.sire||''));
+      roots.sort((a,b)=>{
+        const ga=(a.generation??999), gb=(b.generation??999);
+        if(ga!==gb) return ga-gb;
+        return String(a.personnage_nom||'').localeCompare(String(b.personnage_nom||''),'fr');
+      });
+      ctx.rootId = (roots[0]||cand[0]).id;
+    } else {
+      ctx.rootId = pickRoot();
+    }
+  } else {
+    ctx.rootId = pickRoot();
+  }
+  const treeData=(function build(rootId){
+    const seen=new Set();
+    function rec(id){ if(seen.has(id)) return null; seen.add(id);
+      const p=ctx.byId.get(id); if(!p) return null;
+      const kids=(p.infants||[]).filter(cid=>ctx.byId.has(cid) && (!currentLineage || (String(ctx.byId.get(cid).lignee||'').trim().toLowerCase()===String(currentLineage).trim().toLowerCase())))
+      .map(rec).filter(Boolean);
+      return { id:p.id, data:p, children:kids, _w:240, _h:120 };
+    } return rec(rootId);
+  })(ctx.rootId);
+  const covered=new Set(); (function collect(n){if(!n)return; covered.add(n.id); (n.children||[]).forEach(collect);})(treeData);
+  $("#stats").textContent=`${records.length} persos · racine: ${ctx.rootId}${lastPath?' · '+lastPath:''}`;
+  renderTree(treeData);
+  renderIsolated(covered);
+}
+
+/* ===== Fichiers & Sauvegarde ===== */
+async function loadChoices(){
+  try{
+    if(window.api?.loadEmbedded){
+      const raw = await window.api.loadEmbedded('choice.json');
+      if(raw){ choices = raw; return; }
+    }
+  }catch{}
+  try{
+    const res=await fetch('choice.json'); if(res && res.ok){
+      const txt=await res.text();
+      choices = smartParseJSON(txt);
+    }
+  }catch{}
+}
+$("#openJson").onclick=async()=>{
+  if(window.api?.openJson){
+    const res=await window.api.openJson();
+    if(res && res.records){
+      records = normalizeRecords(res.records);
+      if (res.choices) choices = res.choices; else await loadChoices();
+      lastPath  = res.filePath || null;
+      fileHandle = null;
+      renderAll(); return;
+    }
+  }
+  if(window.showOpenFilePicker){
+    try{
+      const [handle]=await showOpenFilePicker({types:[{description:'JSON',accept:{'application/json':['.json']}}]});
+      fileHandle=handle; lastPath=handle.name||'vtm_db.json';
+      const file=await handle.getFile(); const text=await file.text();
+      records = normalizeRecords(smartParseJSON(text));
+      if(!choices) await loadChoices();
+      renderAll(); return;
+    }catch(e){return;}
+  }
+  const picker=$("#filePicker");
+  picker.onchange=async(ev)=>{
+    const file=ev.target.files?.[0]; if(!file)return;
+    const text=await file.text();
+    try{records=normalizeRecords(smartParseJSON(text)); if(!choices) await loadChoices(); lastPath=file.name||null; fileHandle=null; renderAll();}
+    catch(err){showToast('Impossible de parser le JSON (voir console).', 'warn'); console.error(err);}
+    finally{picker.value="";}
+  };
+  picker.click();
+};
+async function saveToSameFile({saveAs=false}={}){
+  if(window.api?.saveJson){
+    const saved=await window.api.saveJson({ data: records, saveAs });
+    if(saved) lastPath=saved; return;
+  }
+  if(fileHandle && !saveAs){
+    const w=await fileHandle.createWritable(); await w.write(JSON.stringify(records,null,2)); await w.close(); return;
+  }
+  if(window.showSaveFilePicker){
+    const handle=await showSaveFilePicker({
+      suggestedName:lastPath||'vtm_db.json',
+      types:[{description:'JSON',accept:{'application/json':['.json']}}]
+    });
+    const w=await handle.createWritable(); await w.write(JSON.stringify(records,null,2)); await w.close();
+    fileHandle=handle; lastPath=handle.name||lastPath||'vtm_db.json'; return;
+  }
+  downloadBlob(lastPath||'vtm_db.json', JSON.stringify(records,null,2));
+}
+$("#saveJson").onclick = ()=>{
+  if (window.FB && window.FB.currentClan) return saveRemote();
+  return saveToSameFile({});
+};
+$("#exportJson").onclick=()=>downloadBlob(lastPath||"vtm_db.json", JSON.stringify(records,null,2));
+$("#addPerson").onclick=()=>openEditForm(null);
+
+/* ===== Recherche + Modal close ===== */
+$("#search").addEventListener("input",(e)=>{
+  const q=e.target.value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  $$("foreignObject .node-card", $("#treeSvg")).forEach(n=>{
+    const name=n.querySelector(".font-semibold")?.textContent||"";
+    const norm=name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    n.style.opacity = norm.includes(q) ? "1" : "0.15";
+  });
+  $$("#isolated > div").forEach(wrapper=>{
+    const name=wrapper.querySelector(".font-semibold")?.textContent||"";
+    const norm=name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    wrapper.style.display = norm.includes(q) ? "" : "none";
+  });
+});
+document.addEventListener("keydown",(e)=>{const t=e.target,tag=t?.tagName; if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||t?.isContentEditable)return; if(e.key==="Escape") $("#modal").classList.add("hidden");},{capture:true});
+$$("#modal [data-close]").forEach(b=>b.addEventListener("click",()=>$("#modal").classList.add("hidden")));
+$("#modal").addEventListener("click",(e)=>{if(e.target.matches("[data-close], #modal")) $("#modal").classList.add("hidden");});
+
+/* ===== Hooks Electron (si présents) ===== */
+console.log("[renderer] window.api =", !!window.api);
+if (window.api){
+  window.api.onMenuOpen(async () => {
+    const res = await window.api.openJson();
+    if(res && res.records){
+      records = normalizeRecords(res.records);
+      if (res.choices) choices = res.choices; else await loadChoices();
+      lastPath = res.filePath || null;
+      renderAll();
+    }
+  });
+  window.api.onMenuSave(()=> saveToSameFile({saveAs:false}));
+  window.api.onMenuSaveAs(()=> saveToSameFile({saveAs:true}));
+}
+
+/* ===== Boot ===== */
+(async function boot(){
+  try{
+    if(window.api?.loadEmbedded){
+      const db=window.api.loadEmbedded('vtm_db.json'); if(db){ records=normalizeRecords(db); lastPath='vtm_db.json'; }
+      const ch=await window.api.loadEmbedded('choice.json'); if(ch) choices=ch;
+    }
+    if(!records.length){
+      const dbRes=await fetch('vtm_db.json').catch(()=>null);
+      if(dbRes && dbRes.ok){ const txt=await dbRes.text(); records=normalizeRecords(smartParseJSON(txt)); lastPath='vtm_db.json'; }
+    }
+    if(!choices){
+      const cRes=await fetch('choice.json').catch(()=>null);
+      if(cRes && cRes.ok){ const txt=await cRes.text(); choices=smartParseJSON(txt); }
+    }
+    updateHoverButton();
+    populateLineageFilter();
+    renderActivityLegend();
+    renderAll();
+  }catch(e){
+    console.error(e);
+    showToast('Erreur au chargement de la base — vérifie le format.', 'warn', 4200);
+  }
+})();
+</script>
+
+<!-- ===== Firebase Login Modal (no config shown) ===== -->
+<div id="fbModal" class="fixed inset-0 z-50 hidden">
+  <div class="absolute inset-0 bg-black/40"></div>
+  <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-lg">
+      <div class="px-5 py-4 border-b flex items-center justify-between">
+        <h3 class="text-lg font-semibold">Connexion Firebase</h3>
+        <button id="fbClose" class="btn">Fermer</button>
+      </div>
+      <div class="p-5 space-y-5">
+        <div class="grid gap-3">
+          <div>
+            <label class="form-label">Email</label>
+            <input id="fbEmail" type="email" class="w-full border rounded-lg px-3 py-2" placeholder="editor@example.com"/>
+          </div>
+          <div>
+            <label class="form-label">Mot de passe</label>
+            <input id="fbPass" type="password" class="w-full border rounded-lg px-3 py-2" placeholder="********"/>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="fbDoLogin" class="btn">Se connecter</button>
+          <span id="fbMsg" class="text-sm text-slate-500"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  #toastWrap{position:fixed;right:16px;bottom:16px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+  .toast{min-width:280px;max-width:420px;background:#111827;color:#fff;padding:10px 12px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.2);opacity:.98;transition:transform .2s ease, opacity .2s ease}
+  .toast.ok{background:#065f46}
+  .toast.warn{background:#92400e}
+  .toast.info{background:#1f2937}
+  .toast.hide{opacity:0;transform:translateY(8px)}
+  body.read-only .edit-disabled{opacity:.5; pointer-events:none; filter:grayscale(40%);}
+</style>
+<div id="toastWrap" aria-live="polite" aria-atomic="true"></div>
+
+
+  <!-- Non-blocking confirm modal -->
+  <div id="confirmModal" class="fixed inset-0 hidden items-center justify-center z-[1000]">
+    <div class="absolute inset-0 bg-black/40"></div>
+    <div class="relative bg-white rounded-xl shadow-2xl w-[min(92vw,420px)] p-4">
+      <h3 class="text-base font-semibold mb-2">Confirmation</h3>
+      <p id="confirmText" class="text-sm text-slate-700 mb-4">Êtes-vous sûr&nbsp;?</p>
+      <div class="flex justify-end gap-2">
+        <button id="confirmCancel" class="btn">Annuler</button>
+        <button id="confirmOk" class="btn btn-danger">Oui, confirmer</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+
+<!-- ===== Firebase integration (modal login only, no config UI) ===== -->
+<script type="module">
+  const $id = (s)=>document.getElementById(s);
+
+  // Modal open/close (no config shown)
+  function openFbModal(msg){
+    const m = $id('fbModal'); m.classList.remove('hidden');
+    $id('fbMsg').textContent = msg || "";
+    $id('fbEmail').value = localStorage.getItem('fbEmail') || "";
+  }
+  function closeFbModal(){ $id('fbModal').classList.add('hidden'); }
+
+  // Badge helpers
+  function setBadge(text, ok){
+    const b = $id('writeBadge');
+    if(!b) return;
+    b.textContent = text;
+    if(ok){
+      b.className = "ml-2 inline-block px-2 py-1 rounded-full text-xs border bg-green-50 border-green-300 text-green-700";
+    }else{
+      b.className = "ml-2 inline-block px-2 py-1 rounded-full text-xs border bg-slate-50 border-slate-300 text-slate-600";
+    }
+  }
+
+  // Toasts (non-bloquants)
+  function showToast(msg, type='info', timeout=2600){
+    const wrap = document.getElementById('toastWrap'); if(!wrap) return;
+    const el = document.createElement('div');
+    el.className = 'toast ' + (type||'info');
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(()=>{ el.classList.add('hide'); setTimeout(()=>el.remove(), 300); }, timeout);
+  }
+
+  // Lecture seule: griser/disable les actions d'édition
+  function setReadOnlyMode(flag){
+    document.body.classList.toggle('read-only', !!flag);
+    const ids = ['addPerson','editBtn','deleteBtn','editBtnInner','deleteBtnInner'];
+    for(const id of ids){
+      const el = document.getElementById(id);
+      if(!el) continue;
+      if(flag){
+        el.classList.add('edit-disabled');
+        el.setAttribute('aria-disabled','true');
+        el.setAttribute('disabled','');
+      }else{
+        el.classList.remove('edit-disabled');
+        el.removeAttribute('aria-disabled');
+        el.removeAttribute('disabled');
+      }
+    }
+  }
+
+  // Firebase singletons
+  if(!window.FB) window.FB = { app:null, auth:null, db:null, user:null, currentClan:null };
+
+  async function ensureFirebase(){
+    if(window.FB.app) return;
+    // Read JSON config from localStorage only (no UI display)
+    const raw = localStorage.getItem('firebaseConfig');
+    if(!raw){ openFbModal("Configuration absente. Contacte l'admin."); throw new Error("Firebase config manquante"); }
+    let cfg;
+    try{ cfg = JSON.parse(raw); }
+    catch{ openFbModal("Configuration invalide. Contacte l'admin."); throw new Error("Config JSON invalide"); }
+
+    const [{ initializeApp }, { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged },
+           { getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, serverTimestamp }] = await Promise.all([
+      import("https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js"),
+      import("https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js"),
+      import("https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js"),
+    ]);
+    window.FB._fire = { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, serverTimestamp };
+    window.FB.app = initializeApp(cfg);
+    window.FB.auth = getAuth(window.FB.app);
+    window.FB.db   = getFirestore(window.FB.app);
+    window.FB._fire.onAuthStateChanged(window.FB.auth, async (u)=>{
+      window.FB.user = u || null;
+      const s = $id('fbStatus'); if(s) s.textContent = u ? `connecté: ${u.email}` : 'non connecté';
+      if(window.FB.currentClan){ try{ await updateWriteBadge(); }catch{} }
+    });
+  }
+
+  async function updateWriteBadge(){
+    const badge = $id('writeBadge');
+    if(!badge) return;
+    if(!window.FB || !window.FB.currentClan){ setBadge('—', false); return; }
+    const { doc, getDoc } = window.FB._fire;
+    const parentRef = doc(window.FB.db, 'files', window.FB.currentClan);
+    const snap = await getDoc(parentRef);
+    const writers = snap.exists() ? (snap.data().writers || []) : [];
+    const ok = !!(window.FB.user && writers.includes(window.FB.user.uid));
+    setBadge(ok ? 'Écriture OK' : 'Lecture seule', ok);
+    setReadOnlyMode(!ok);
+  }
+
+  async function fbDoLogin(){
+    await ensureFirebase();
+    const email = $id('fbEmail').value.trim();
+    const pass  = $id('fbPass').value;
+    await window.FB._fire.signInWithEmailAndPassword(window.FB.auth, email, pass);
+    localStorage.setItem('fbEmail', email);
+    closeFbModal();
+    showToast('Connecté ✔', 'ok');
+    await updateWriteBadge();
+  }
+  async function fbLogout(){
+    if(!window.FB || !window.FB.app) return;
+    await window.FB._fire.signOut(window.FB.auth);
+    await updateWriteBadge();
+  }
+
+  async function loadClan(clan){
+    await ensureFirebase();
+    const { collection, getDocs } = window.FB._fire;
+    const snap = await getDocs(collection(window.FB.db, "files", clan, "characters"));
+    const arr = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Use existing globals from the app:
+    records = normalizeRecords(arr);
+    window.FB.currentClan = clan;
+    lastPath = `firebase:${clan}`;
+    fileHandle = null;
+    if(!choices) await loadChoices();
+    renderAll();
+    await updateWriteBadge();
+  }
+
+  async function saveRemote(){
+    if(!window.FB || !window.FB.currentClan){ showToast('Aucune source Firestore sélectionnée.', 'warn'); return; }
+    // Check permission (badge already computed but re-check)
+    await updateWriteBadge();
+    const badge = $id('writeBadge');
+    if(badge && /Lecture/.test(badge.textContent)){ openFbModal("Connecte-toi avec un compte éditeur."); return; }
+
+    const { doc, setDoc, collection, getDocs, deleteDoc } = window.FB._fire;
+    const clan = window.FB.currentClan;
+
+    let ok=0, fail=0;
+    for(const r of records){
+      const id = String(r.id || baseSlug(r.personnage_nom||'perso'));
+      try{ await setDoc(doc(window.FB.db, "files", clan, "characters", id), r, { merge:true }); ok++; }
+      catch(e){ console.error("setDoc", id, e); fail++; }
+    }
+    // Plus de suppression automatique : supprimer du serveur les fiches absentes de la copie
+    // locale effaçait les ajouts faits ailleurs (autre joueur, nouvelle interface, import).
+    // Une fiche ne doit être supprimée que par une suppression explicite.
+    showToast(`Enregistré ✔ — ${ok} ok, ${fail} erreurs`, fail? 'warn':'ok');
+  }
+  window.saveRemote = saveRemote;
+
+  // Wire UI
+  
+document.addEventListener('DOMContentLoaded', ()=>{
+  // Lignée filter (only if present)
+  const __lin = document.getElementById('lineageFilter');
+  if(__lin){
+    __lin.addEventListener('change', (e)=>{
+      currentLineage = (e.target.value || '').trim();
+      renderAll();
+    });
+  }
+
+  // Clan selection
+  const sel = document.getElementById('clanSelect');
+  if(sel){
+    sel.addEventListener('change', async (e)=>{
+      const clan = e.target.value;
+      if(!clan){
+        lastPath=null; setBadge('—', false); setReadOnlyMode(false);
+        currentLineage=''; populateLineageFilter(); showToast('Mode local activé', 'info');
+        return;
+      }
+      try{
+        await loadClan(clan);
+        populateLineageFilter();
+        if(window.renderActivityLegend){ window.renderActivityLegend(); }
+      }catch(err){
+        console.error(err);
+        openFbModal("Impossible de charger. Vérifie la config côté admin.");
+        sel.value="";
+      }
+    });
+  }
+
+  // Login wiring
+  const openBtn = document.getElementById('fbLoginOpen');
+  const closeBtn= document.getElementById('fbClose');
+  const doLogin = document.getElementById('fbDoLogin');
+  const logout  = document.getElementById('fbLogout');
+
+  if(openBtn) openBtn.onclick = ()=> openFbModal();
+  if(closeBtn) closeBtn.onclick = ()=> closeFbModal();
+  if(doLogin) doLogin.onclick = ()=> fbDoLogin().catch(e=>{ document.getElementById('fbMsg').textContent = "Login: " + e.message; });
+  if(logout)  logout.onclick  = ()=> fbLogout().catch(e=>showToast('Logout: ' + e.message, 'warn'));
+});
+</script>
+
+<script>
+function uiConfirm(message = "Êtes-vous sûr ?"){
+  return new Promise((resolve)=>{
+    const root = document.getElementById('confirmModal');
+    const text = document.getElementById('confirmText');
+    const ok   = document.getElementById('confirmOk');
+    const cancel = document.getElementById('confirmCancel');
+    if(!root || !ok || !cancel){ resolve(window.confirm(message)); return; }
+    text.textContent = message;
+    root.classList.remove('hidden'); root.classList.add('flex');
+    const prevActive = document.activeElement;
+    const cleanup = (val)=>{
+      try{
+        root.classList.add('hidden'); root.classList.remove('flex');
+        ok.onclick = cancel.onclick = null;
+        root.removeEventListener('keydown', onKey, true);
+        if(prevActive && prevActive.focus) prevActive.focus();
+      }catch(_){}
+      resolve(val);
+    };
+    const onKey = (e)=>{
+      if(e.key === 'Escape'){ e.preventDefault(); cleanup(false); }
+      if(e.key === 'Enter'){ e.preventDefault(); cleanup(true); }
+    };
+    root.addEventListener('keydown', onKey, true);
+    ok.onclick = ()=> cleanup(true);
+    cancel.onclick = ()=> cleanup(false);
+    setTimeout(()=>{ try{ ok.focus(); }catch(_){ } }, 0);
+  });
+}
+</script>
+
+</html>
